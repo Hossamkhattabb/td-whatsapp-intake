@@ -18,12 +18,14 @@ async function handleIncomingMessage(message, contact) {
   }
 
   // Resend returns { data, error } instead of throwing on API errors.
+  // The idempotency key makes Resend send at most one email per WhatsApp
+  // message (Resend remembers keys for 24 hours), even if we retry.
   const { data, error } = await resend.emails.send({
     from: EMAIL_FROM,
     to: email,
     subject: 'We received your request',
     html: `<p>Dear ${name},</p><p>We received your message: "${text}". Our team will contact you within one working day.</p>`,
-  });
+  }, { idempotencyKey: `confirmation-email/${message.id}` });
 
   if (error) {
     console.error(`Resend failed for message ${message.id}:`, error.name, error.message);
@@ -31,11 +33,12 @@ async function handleIncomingMessage(message, contact) {
       message.from,
       'Thank you. We received your request, but we could not send the confirmation email. Our team will contact you.',
     );
-    return;
+    return { emailId: null };
   }
 
   console.log(`Confirmation email ${data?.id} sent for message ${message.id}`);
   await sendWhatsAppText(message.from, 'Thank you. A confirmation email has been sent.');
+  return { emailId: data?.id ?? null };
 }
 
 module.exports = { handleIncomingMessage };

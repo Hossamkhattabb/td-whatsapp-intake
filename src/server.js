@@ -19,6 +19,7 @@ if (missing.length) {
 const crypto = require('crypto');
 const express = require('express');
 const { handleIncomingMessage } = require('./handler');
+const { createStore } = require('./store');
 
 const { META_VERIFY_TOKEN, META_APP_SECRET } = process.env;
 const PORT = process.env.PORT || 3000;
@@ -46,20 +47,24 @@ function isValidSignature(rawBody, header) {
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
-// Meta retries deliveries, so remember recently handled message IDs to avoid
-// sending the same confirmation email twice. In-memory only: it resets on
-// restart/redeploy and is not shared between instances.
-const SEEN_TTL_MS = 24 * 60 * 60 * 1000;
-const seenMessages = new Map();
-function alreadySeen(id) {
-  const now = Date.now();
-  for (const [key, at] of seenMessages) {
-    if (now - at < SEEN_TTL_MS) break; // Map keeps insertion order: oldest first
-    seenMessages.delete(key);
+// Meta can deliver the same message more than once. The store records each
+// message ID persistently so a redelivery never sends a second email.
+const store = createStore();
+
+async function processMessage(message, contact) {
+  if (!(await store.claim(message.id))) {
+    console.log(`Skipping duplicate delivery of message ${message.id}`);
+    return;
   }
-  if (seenMessages.has(id)) return true;
-  seenMessages.set(id, now);
-  return false;
+  try {
+    const result = await handleIncomingMessage(message, contact);
+    await store.complete(message.id, result?.emailId);
+  } catch (err) {
+    // 'failed' lets a later redelivery retry; Resend's idempotency key
+    // (the same message ID) stops that retry from sending a second email.
+    await store.fail(message.id, err.message);
+    throw err;
+  }
 }
 
 // Collect every message in the payload. Status updates (sent/delivered/read)
@@ -100,8 +105,8 @@ app.post('/webhook', express.raw({ type: '*/*', limit: '1mb' }), (req, res) => {
   res.sendStatus(200);
 
   for (const { message, contact } of extractMessages(body)) {
-    if (!message?.id || alreadySeen(message.id)) continue;
-    handleIncomingMessage(message, contact).catch((err) => {
+    if (!message?.id) continue;
+    processMessage(message, contact).catch((err) => {
       console.error(`Failed to handle message ${message.id}:`, err.message);
     });
   }
@@ -109,4 +114,10 @@ app.post('/webhook', express.raw({ type: '*/*', limit: '1mb' }), (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => console.log(`Listening on ${PORT}`));
+store
+  .init()
+  .then(() => app.listen(PORT, () => console.log(`Listening on ${PORT} (dedup store: ${store.kind})`)))
+  .catch((err) => {
+    console.error('Could not initialise dedup store:', err.message);
+    process.exit(1);
+  });
