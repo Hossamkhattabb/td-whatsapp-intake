@@ -1,6 +1,6 @@
-## 2.4 Requirement (b): no duplicate emails
+# Requirement (b): no duplicate emails
 
-### The problem
+## The problem
 
 Meta delivers webhooks *at least once*. If our server is slow to answer, returns an error, or is
 waking up on Render, Meta sends the same message again, sometimes much later. The starter code
@@ -10,7 +10,7 @@ Answering `200` immediately (step 2) makes retries rarer, but it does not stop t
 or a network drop between Meta and Render can still cause a redelivery. So the server has to
 recognise a message it has already handled.
 
-### The key: the WhatsApp message ID
+## The key: the WhatsApp message ID
 
 Every incoming message has a unique ID (`messages[].id`, for example `wamid.HBgL…`). Meta keeps
 the same ID across redeliveries, so it identifies "this message" exactly. We use it in two
@@ -26,7 +26,7 @@ The two layers cover different failures. Our record stops repeat processing. Res
 covers the gap where the email went out but we crashed, or the WhatsApp reply failed, before
 the message was marked done. Retrying then cannot send a second email.
 
-### Why a persistent store
+## Why a persistent store
 
 The first version kept seen IDs in memory. That list is lost on every Render restart,
 redeploy or free-tier sleep, which is exactly when Meta tends to retry. It is also not shared if
@@ -62,11 +62,13 @@ Postgres was chosen over Render Key Value (Redis) because Render's free Key Valu
 data only in memory, which would bring back the restart problem. Note: Render's *free*
 Postgres expires after 30 days, so production needs a paid instance.
 
-On Render (where the `RENDER` variable is set) the server refuses to start without
-`DATABASE_URL`. For local development without a database it falls back to the in-memory store
-and logs a warning.
+**Running locally** (no `DATABASE_URL`): the same records are kept in
+`data/processed-messages.json`. It needs no setup and still survives restarts. Writes go through a
+temp file and a rename, so a crash can't corrupt it. The claim check runs without any `await`, so
+two simultaneous deliveries can't both win. On Render (where the `RENDER` variable is set) the
+server refuses to start without `DATABASE_URL`, because Render's disk is wiped on deploy.
 
-### How it was tested
+## How it was tested
 
 Tested locally against a real PostgreSQL 16, with the calls to Meta and Resend faked:
 
@@ -77,8 +79,9 @@ Tested locally against a real PostgreSQL 16, with the calls to Meta and Resend f
 | Server restarted, then redelivered | skipped: the record survived the restart |
 | WhatsApp reply fails after the email was sent | row `failed`; the next delivery retries with the **same** idempotency key, so real Resend would not send it twice |
 | Started with `RENDER=true` and no `DATABASE_URL` | refuses to start |
+| Local file store: sample sent, server restarted, sample sent again | second one skipped |
 
-### Limits
+## Limits
 
 - Resend remembers idempotency keys for 24 hours. A retry of a `failed` message after that
   could send a second email. Meta's retries normally stop well before then.

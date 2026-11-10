@@ -5,9 +5,19 @@ and sends the client a confirmation email through Resend.
 
 ## Run locally
 
-    cp .env.example .env   # fill in real values; .env is git-ignored, never commit it
+    cp .env.example .env   # or use the provided .env; it is git-ignored, never commit it
     npm install
     npm start
+
+In a second terminal, send the sample message signed with `META_APP_SECRET` from `.env`, the way Meta signs it:
+
+    npm run send-sample                       # samples/incoming-message.json
+    npm run send-sample -- path/to/other.json
+
+`.env` is loaded from the project root whichever directory you start from. Only `META_APP_SECRET`
+is required to start. The others print a warning, and their feature fails cleanly without them.
+Locally, handled message IDs are stored in `data/processed-messages.json`, so a resend is skipped
+even after a restart. Delete that file to reset.
 
 ## Deploy on Render
 
@@ -27,7 +37,7 @@ and sends the client a confirmation email through Resend.
 | `META_ACCESS_TOKEN` | Token for sending WhatsApp messages (use a System User token in production) |
 | `WHATSAPP_PHONE_NUMBER_ID` | The business phone number ID |
 | `RESEND_API_KEY` | Resend API key |
-| `DATABASE_URL` | Postgres for message dedup. Required on Render; optional locally (in-memory fallback) |
+| `DATABASE_URL` | Postgres for message dedup. Required on Render; optional locally (a JSON file in `data/` is used instead) |
 | `EMAIL_FROM` | Optional. Sender on a domain verified in Resend |
 
 The server refuses to start if any required variable is missing.
@@ -37,5 +47,7 @@ The server refuses to start if any required variable is missing.
 - `GET /webhook` returns `hub.challenge` as plain text when `hub.verify_token` matches.
 - `POST /webhook` checks the HMAC-SHA256 signature of the raw body with `crypto.timingSafeEqual`. A bad or missing signature gets `401`.
 - Valid requests get `200` immediately and are processed afterwards. Every message in the payload is handled. Status updates (no `messages`) are ignored.
-- Each WhatsApp message ID is recorded in Postgres and also sent to Resend as the idempotency key, so Meta's retries never send a duplicate email. See [docs/WRITEUP.md](docs/WRITEUP.md), section 2.4.
+- Each WhatsApp message ID is recorded in Postgres and also sent to Resend as the idempotency key, so Meta's retries never send a duplicate email. See [docs/DUPLICATES.md](docs/DUPLICATES.md).
+- The client's name and message are HTML-escaped in the email, and a plain-text version is included.
+- Non-text messages (images, voice notes…) get a request to send text. Reactions and system messages are ignored.
 - Resend `{ error }` results are checked. On failure, the client is told the email could not be sent.

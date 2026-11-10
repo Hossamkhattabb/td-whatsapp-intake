@@ -1,9 +1,9 @@
 // Records which WhatsApp message IDs have been handled, so a message is only
 // processed once even if Meta delivers it several times.
 //
-// Production (DATABASE_URL set): Postgres, which survives restarts/redeploys and
-// is shared by every instance. Local development without DATABASE_URL: an
-// in-memory Map (lost on restart). On Render (RENDER is set) DATABASE_URL is required.
+// DATABASE_URL set (production on Render): Postgres, which survives restarts and
+// redeploys and is shared by every instance. Otherwise (local runs): a JSON file
+// in data/, which survives restarts. On Render (RENDER is set) DATABASE_URL is required.
 
 const STALE_CLAIM_MINUTES = 10; // a 'processing' row older than this is assumed crashed
 const RETENTION_DAYS = 30; // Meta stops retrying long before this
@@ -67,25 +67,48 @@ function createPostgresStore(connectionString) {
   };
 }
 
-function createMemoryStore() {
-  const rows = new Map();
+// Local default: a JSON file in data/. Survives restarts and needs no setup.
+// Not for Render: its disk is wiped on every deploy and restart.
+function createFileStore(filePath) {
+  const fs = require('fs');
+  const path = require('path');
+  let rows = {};
+
+  // Write to a temp file then rename, so a crash never leaves a half-written file.
+  function save() {
+    const tmp = `${filePath}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(rows));
+    fs.renameSync(tmp, filePath);
+  }
+
   return {
-    kind: 'memory',
-    async init() {},
+    kind: `file (${path.relative(process.cwd(), filePath) || filePath})`,
+    async init() {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      if (fs.existsSync(filePath)) rows = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const cutoff = Date.now() - RETENTION_DAYS * 24 * 3600e3;
+      for (const [id, row] of Object.entries(rows)) if (row.claimedAt < cutoff) delete rows[id];
+      save();
+    },
+    // Check and set run with no await in between. Node runs this without
+    // interruption, so two simultaneous deliveries cannot both claim the ID.
     async claim(id) {
-      const row = rows.get(id);
+      const row = rows[id];
       const stale = row?.status === 'processing' && Date.now() - row.claimedAt > STALE_CLAIM_MINUTES * 60e3;
       if (row && row.status !== 'failed' && !stale) return false;
-      rows.set(id, { status: 'processing', claimedAt: Date.now() });
+      rows[id] = { status: 'processing', claimedAt: Date.now() };
+      save();
       return true;
     },
-    async complete(id) {
-      const row = rows.get(id);
-      if (row) row.status = 'done';
+    async complete(id, emailId = null) {
+      if (!rows[id]) return;
+      Object.assign(rows[id], { status: 'done', completedAt: Date.now(), emailId });
+      save();
     },
-    async fail(id) {
-      const row = rows.get(id);
-      if (row) row.status = 'failed';
+    async fail(id, error) {
+      if (!rows[id]) return;
+      Object.assign(rows[id], { status: 'failed', error: String(error).slice(0, 500) });
+      save();
     },
     async close() {},
   };
@@ -94,10 +117,10 @@ function createMemoryStore() {
 function createStore() {
   if (process.env.DATABASE_URL) return createPostgresStore(process.env.DATABASE_URL);
   if (process.env.RENDER) {
-    throw new Error('DATABASE_URL is required on Render: in-memory dedup is lost on every restart');
+    throw new Error('DATABASE_URL is required on Render: its disk is wiped on every deploy/restart');
   }
-  console.warn('DATABASE_URL not set: using in-memory dedup (local development only)');
-  return createMemoryStore();
+  const file = process.env.DEDUP_FILE || require('path').join(__dirname, '..', 'data', 'processed-messages.json');
+  return createFileStore(file);
 }
 
 module.exports = { createStore };

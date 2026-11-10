@@ -4,7 +4,8 @@
   "description": "Receives client WhatsApp messages and sends a confirmation email",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "send-sample": "node scripts/send-sample.js"
   },
   "engines": {
     "node": ">=20"

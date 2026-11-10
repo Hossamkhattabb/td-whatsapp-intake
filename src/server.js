@@ -1,19 +1,18 @@
-// Load .env BEFORE anything reads process.env (including ./handler, which
-// creates the Resend client at require time). On Render there is no .env file;
-// variables come from the service's Environment settings and dotenv is a no-op.
-require('dotenv').config();
+// Load .env BEFORE anything reads process.env. The path is fixed to the project
+// root, so it works whichever directory the server is started from (plain
+// dotenv.config() only looks in the current working directory). On Render there
+// is no .env file; variables come from the Environment settings.
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const REQUIRED_ENV = [
-  'META_VERIFY_TOKEN',
-  'META_APP_SECRET',
-  'META_ACCESS_TOKEN',
-  'WHATSAPP_PHONE_NUMBER_ID',
-  'RESEND_API_KEY',
-];
-const missing = REQUIRED_ENV.filter((name) => !process.env[name]);
-if (missing.length) {
-  console.error(`Missing required environment variables: ${missing.join(', ')}`);
+// Without the app secret no webhook can be verified, so refuse to start.
+if (!process.env.META_APP_SECRET) {
+  console.error('META_APP_SECRET is not set (check .env or the environment). Refusing to start.');
   process.exit(1);
+}
+// The rest only affect individual features; warn so local runs still work.
+for (const name of ['META_VERIFY_TOKEN', 'META_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'RESEND_API_KEY']) {
+  if (!process.env[name]) console.warn(`Warning: ${name} is not set`);
 }
 
 const crypto = require('crypto');
@@ -32,7 +31,7 @@ app.get('/webhook', (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === META_VERIFY_TOKEN && challenge) {
+  if (mode === 'subscribe' && META_VERIFY_TOKEN && token === META_VERIFY_TOKEN && challenge) {
     return res.status(200).type('text/plain').send(String(challenge));
   }
   return res.sendStatus(403);
