@@ -3,11 +3,19 @@
 // dotenv.config() only looks in the current working directory). On Render there
 // is no .env file; variables come from the Environment settings.
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const ENV_PATH = path.join(__dirname, '..', '.env');
+const dotenvResult = require('dotenv').config({ path: ENV_PATH });
+// Say clearly where configuration came from, so a missing or misnamed .env is
+// obvious in the first line of output instead of showing up later as 401s.
+if (dotenvResult.error) {
+  console.log(`No .env file at ${ENV_PATH}; using environment variables only`);
+} else {
+  console.log(`Loaded .env from ${ENV_PATH} (${Object.keys(dotenvResult.parsed).join(', ')})`);
+}
 
 // Without the app secret no webhook can be verified, so refuse to start.
 if (!process.env.META_APP_SECRET) {
-  console.error('META_APP_SECRET is not set (check .env or the environment). Refusing to start.');
+  console.error('META_APP_SECRET is not set (check the variable name in .env). Refusing to start.');
   process.exit(1);
 }
 // The rest only affect individual features; warn so local runs still work.
